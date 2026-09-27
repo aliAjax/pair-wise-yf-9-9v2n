@@ -1,8 +1,11 @@
 const storageKey = "zfl18-boardgame-rule-cards";
+const tonightLimit = 180;
 const today = new Date();
 
 const defaultState = {
   selectedId: "",
+  tonight: { players: 4, queue: [], confirmed: false },
+  records: [],
   games: [
     {
       id: crypto.randomUUID(),
@@ -52,6 +55,9 @@ const defaultState = {
 let state = loadState();
 if (!state.selectedId) state.selectedId = state.games[0]?.id || "";
 
+let tonightWarning = "";
+let finishingTonight = false;
+
 const els = {
   searchInput: document.querySelector("#searchInput"),
   playerFilter: document.querySelector("#playerFilter"),
@@ -70,7 +76,18 @@ const els = {
   gameCount: document.querySelector("#gameCount"),
   ruleCount: document.querySelector("#ruleCount"),
   staleGame: document.querySelector("#staleGame"),
-  visibleCount: document.querySelector("#visibleCount")
+  visibleCount: document.querySelector("#visibleCount"),
+  tonightPanel: document.querySelector("#tonightPanel"),
+  tonightPlayers: document.querySelector("#tonightPlayers"),
+  tonightTotal: document.querySelector("#tonightTotal"),
+  tonightMeter: document.querySelector("#tonightMeter"),
+  tonightWarning: document.querySelector("#tonightWarning"),
+  tonightRecord: document.querySelector("#tonightRecord"),
+  tonightActions: document.querySelector("#tonightActions"),
+  tonightColumns: document.querySelector("#tonightColumns"),
+  tonightCandidates: document.querySelector("#tonightCandidates"),
+  tonightQueue: document.querySelector("#tonightQueue"),
+  tonightReview: document.querySelector("#tonightReview")
 };
 
 function loadState() {
@@ -220,11 +237,165 @@ function renderRuleSection(title, key, items) {
   `;
 }
 
+function isSuitableFor(game, players) {
+  return players >= game.minPlayers && players <= game.maxPlayers;
+}
+
+function getQueuedGames() {
+  return state.tonight.queue
+    .map((id) => state.games.find((game) => game.id === id))
+    .filter(Boolean);
+}
+
+function getTonightTotal() {
+  return getQueuedGames()
+    .filter((game) => isSuitableFor(game, state.tonight.players))
+    .reduce((sum, game) => sum + game.duration, 0);
+}
+
+function renderTonight() {
+  state.tonight.queue = state.tonight.queue.filter((id) => state.games.some((game) => game.id === id));
+  const players = state.tonight.players;
+  const queued = getQueuedGames();
+  const suitable = queued.filter((game) => isSuitableFor(game, players));
+  const total = suitable.reduce((sum, game) => sum + game.duration, 0);
+
+  els.tonightPlayers.value = players;
+  els.tonightTotal.textContent = total;
+  els.tonightMeter.style.width = `${Math.min(100, (total / tonightLimit) * 100)}%`;
+  els.tonightWarning.hidden = !tonightWarning;
+  els.tonightWarning.textContent = tonightWarning;
+
+  const last = state.records[state.records.length - 1];
+  els.tonightRecord.textContent = last
+    ? `上次聚会 ${last.date} · ${last.players}人 · ${last.games.join("、") || "未记录桌游"}`
+    : "";
+
+  if (!state.tonight.confirmed) {
+    els.tonightColumns.hidden = false;
+    els.tonightReview.innerHTML = "";
+    els.tonightActions.innerHTML = `<button id="confirmTonightBtn" class="primary" type="button">确认桌单</button>`;
+    renderTonightCandidates(players);
+    renderTonightQueue(queued, players);
+    return;
+  }
+
+  els.tonightColumns.hidden = true;
+  els.tonightActions.innerHTML = finishingTonight
+    ? `
+      <form id="finishForm" class="finish-form">
+        <label>
+          实际参与人数
+          <input id="actualPlayersInput" type="number" min="1" max="12" value="${players}" required />
+        </label>
+        <button class="primary" type="submit">记录并清空</button>
+        <button id="cancelFinishBtn" type="button">取消</button>
+      </form>
+    `
+    : `
+      <button id="editTonightBtn" type="button">重新调整</button>
+      <button id="finishTonightBtn" class="primary" type="button">结束今晚</button>
+    `;
+  renderTonightReview(queued, suitable);
+}
+
+function renderTonightCandidates(players) {
+  const candidates = state.games.filter(
+    (game) => isSuitableFor(game, players) && !state.tonight.queue.includes(game.id)
+  );
+  els.tonightCandidates.innerHTML =
+    candidates
+      .map(
+        (game) => `
+        <div class="tonight-item">
+          <div class="tonight-item-info">
+            <strong>${escapeHtml(game.name)}</strong>
+            <div class="game-meta">
+              <span class="pill">${game.minPlayers}-${game.maxPlayers}人</span>
+              <span class="pill">${game.duration}分钟</span>
+            </div>
+          </div>
+          <button type="button" data-add-id="${game.id}">加入</button>
+        </div>
+      `
+      )
+      .join("") || `<p class="empty">当前人数没有可加入的收藏。</p>`;
+}
+
+function renderTonightQueue(queued, players) {
+  els.tonightQueue.innerHTML =
+    queued
+      .map((game, index) => {
+        const suitable = isSuitableFor(game, players);
+        return `
+        <div class="tonight-item ${suitable ? "" : "mismatch"}">
+          <span class="order">${index + 1}</span>
+          <div class="tonight-item-info">
+            <strong>${escapeHtml(game.name)}</strong>
+            <div class="game-meta">
+              <span class="pill">${game.duration}分钟</span>
+              ${suitable ? "" : `<span class="pill warn">人数不合适，不计时长</span>`}
+            </div>
+          </div>
+          <div class="item-actions">
+            <button type="button" title="上移" data-move="${index}:-1" ${index === 0 ? "disabled" : ""}>↑</button>
+            <button type="button" title="下移" data-move="${index}:1" ${index === queued.length - 1 ? "disabled" : ""}>↓</button>
+            <button type="button" data-remove-index="${index}">挪走</button>
+          </div>
+        </div>
+      `;
+      })
+      .join("") || `<p class="empty">还没排桌游，从左边加入。</p>`;
+}
+
+function renderTonightReview(queued, suitable) {
+  const skipped = queued.length - suitable.length;
+  els.tonightReview.innerHTML = `
+    <div class="review">
+      <h3>今晚复习清单（按桌单顺序）</h3>
+      ${skipped ? `<p class="tonight-note">${skipped} 盒因人数不合适已跳过，不计入清单。</p>` : ""}
+      ${suitable
+        .map(
+          (game, index) => `
+        <section class="rule-section">
+          <h3>${index + 1}. ${escapeHtml(game.name)}（${game.duration}分钟）</h3>
+          <div class="review-grid">
+            <div>
+              <h4>容易忘的规则</h4>
+              <ul>${game.forgets.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无</li>"}</ul>
+            </div>
+            <div>
+              <h4>常见争议</h4>
+              <ul>${game.disputes.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无</li>"}</ul>
+            </div>
+          </div>
+        </section>
+      `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function tryAddToTonight(gameId) {
+  const game = state.games.find((item) => item.id === gameId);
+  if (!game) return;
+  const total = getTonightTotal();
+  if (total + game.duration > tonightLimit) {
+    tonightWarning = `再加《${game.name}》就到 ${total + game.duration} 分钟，超过 3 小时放不下了。`;
+  } else {
+    state.tonight.queue.push(gameId);
+    tonightWarning = "";
+  }
+  renderAll();
+}
+
 function renderAll() {
   saveState();
   renderSummary();
   renderList();
   renderDetail();
+  renderTonight();
 }
 
 function readFileAsDataUrl(file) {
@@ -330,6 +501,92 @@ els.detailView.addEventListener("click", (event) => {
     state.selectedId = state.games[0]?.id || "";
     renderAll();
   }
+});
+
+els.tonightPlayers.addEventListener("change", () => {
+  const players = Math.max(1, Math.min(12, Number(els.tonightPlayers.value) || 1));
+  state.tonight.players = players;
+  state.tonight.confirmed = false;
+  finishingTonight = false;
+  tonightWarning = "";
+  renderAll();
+});
+
+els.tonightPanel.addEventListener("click", (event) => {
+  const addButton = event.target.closest("[data-add-id]");
+  const moveButton = event.target.closest("[data-move]");
+  const removeButton = event.target.closest("[data-remove-index]");
+
+  if (addButton) {
+    tryAddToTonight(addButton.dataset.addId);
+    return;
+  }
+
+  if (moveButton) {
+    const [index, delta] = moveButton.dataset.move.split(":").map(Number);
+    const target = index + delta;
+    const queue = state.tonight.queue;
+    if (target < 0 || target >= queue.length) return;
+    [queue[index], queue[target]] = [queue[target], queue[index]];
+    tonightWarning = "";
+    renderAll();
+    return;
+  }
+
+  if (removeButton) {
+    state.tonight.queue.splice(Number(removeButton.dataset.removeIndex), 1);
+    tonightWarning = "";
+    renderAll();
+    return;
+  }
+
+  if (event.target.closest("#confirmTonightBtn")) {
+    const hasSuitable = getQueuedGames().some((game) => isSuitableFor(game, state.tonight.players));
+    if (!hasSuitable) {
+      tonightWarning = "桌单里还没有适合当前人数的桌游。";
+      renderAll();
+      return;
+    }
+    state.tonight.confirmed = true;
+    tonightWarning = "";
+    renderAll();
+    return;
+  }
+
+  if (event.target.closest("#editTonightBtn")) {
+    state.tonight.confirmed = false;
+    finishingTonight = false;
+    renderAll();
+    return;
+  }
+
+  if (event.target.closest("#finishTonightBtn")) {
+    finishingTonight = true;
+    renderAll();
+    return;
+  }
+
+  if (event.target.closest("#cancelFinishBtn")) {
+    finishingTonight = false;
+    renderAll();
+  }
+});
+
+els.tonightPanel.addEventListener("submit", (event) => {
+  if (event.target.id !== "finishForm") return;
+  event.preventDefault();
+  const actual = Math.max(
+    1,
+    Math.min(12, Number(document.querySelector("#actualPlayersInput").value) || state.tonight.players)
+  );
+  const played = getQueuedGames()
+    .filter((game) => isSuitableFor(game, state.tonight.players))
+    .map((game) => game.name);
+  state.records.push({ date: new Date().toISOString().slice(0, 10), players: actual, games: played });
+  state.tonight = { players: actual, queue: [], confirmed: false };
+  finishingTonight = false;
+  tonightWarning = "";
+  renderAll();
 });
 
 setDefaultDate();

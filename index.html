@@ -63,6 +63,36 @@
         </label>
       </section>
 
+      <section class="panel tonight-panel" id="tonightPanel">
+        <div class="panel-head">
+          <h2>今晚桌单</h2>
+          <span id="tonightRecord"></span>
+        </div>
+        <div class="tonight-bar">
+          <label class="tonight-players">
+            到场人数
+            <input id="tonightPlayers" type="number" min="1" max="12" />
+          </label>
+          <div class="tonight-progress">
+            <span><strong id="tonightTotal">0</strong> / 180 分钟</span>
+            <div class="meter"><div id="tonightMeter"></div></div>
+          </div>
+          <div class="tonight-actions" id="tonightActions"></div>
+        </div>
+        <p class="tonight-warning" id="tonightWarning" hidden></p>
+        <div class="tonight-columns" id="tonightColumns">
+          <div>
+            <h3>可选收藏（适合当前人数且未排）</h3>
+            <div id="tonightCandidates" class="tonight-list"></div>
+          </div>
+          <div>
+            <h3>桌单顺序</h3>
+            <div id="tonightQueue" class="tonight-list"></div>
+          </div>
+        </div>
+        <div id="tonightReview"></div>
+      </section>
+
       <section class="layout">
         <aside class="panel">
           <h2>新增桌游</h2>
